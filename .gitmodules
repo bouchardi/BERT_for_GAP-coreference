@@ -4,3 +4,6 @@
 [submodule "pytorch-pretrained-BERT"]
 	path = pytorch-pretrained-BERT
 	url = git@github.com:huggingface/pytorch-pretrained-BERT.git
+[submodule "swagaf"]
+	path = swagaf
+	url = git@github.com:rowanz/swagaf.git
