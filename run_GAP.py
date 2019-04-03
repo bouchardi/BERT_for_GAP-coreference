@@ -270,12 +270,6 @@ def main():
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
-    parser.add_argument("--do_train",
-                        action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval",
-                        action='store_true',
-                        help="Whether to run eval on the dev set.")
     parser.add_argument("--do_lower_case",
                         action='store_true',
                         help="Set this flag if you are using an uncased model.")
@@ -292,7 +286,7 @@ def main():
                         type=float,
                         help="The initial learning rate for Adam.")
     parser.add_argument("--num_train_epochs",
-                        default=3.0,
+                        default=1000,
                         type=float,
                         help="Total number of training epochs to perform.")
     parser.add_argument("--warmup_proportion",
@@ -316,22 +310,16 @@ def main():
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-    if not args.do_train and not args.do_eval:
-        raise ValueError("At least one of `do_train` or `do_eval` must be True.")
-
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    train_examples = None
-    num_train_optimization_steps = None
-    if args.do_train:
-        train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training = True)
-        #train_examples = read_swag_examples(os.path.join(args.data_dir, 'train.csv'), is_training = True)
-        num_train_optimization_steps = int(
-            len(train_examples) / args.train_batch_size) * args.num_train_epochs
+
+    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training = True)
+    eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training = True)
+    num_train_optimization_steps = int(len(train_examples) / args.train_batch_size) * args.num_train_epochs
 
     # Prepare model
     model = BertForMultipleChoice.from_pretrained(args.bert_model,
@@ -359,73 +347,58 @@ def main():
                          t_total=num_train_optimization_steps)
 
     global_step = 0
-    if args.do_train:
-        train_features = convert_examples_to_features(
-            train_examples, tokenizer, args.max_seq_length, True)
-        logger.info("***** Running training *****")
-        logger.info("  Num examples = %d", len(train_examples))
-        logger.info("  Batch size = %d", args.train_batch_size)
-        logger.info("  Num steps = %d", num_train_optimization_steps)
-        all_input_ids = torch.tensor(select_field(train_features, 'input_ids'), dtype=torch.long)
-        all_input_mask = torch.tensor(select_field(train_features, 'input_mask'), dtype=torch.long)
-        all_segment_ids = torch.tensor(select_field(train_features, 'segment_ids'), dtype=torch.long)
-        all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-        train_sampler = RandomSampler(train_data)
-        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
+    train_features = convert_examples_to_features(train_examples, tokenizer, args.max_seq_length, True)
 
-        model.train()
-        for _ in trange(int(args.num_train_epochs), desc="Epoch"):
-            tr_loss = 0
-            nb_tr_examples, nb_tr_steps = 0, 0
-            for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
-                batch = tuple(t.to(device) for t in batch)
-                input_ids, input_mask, segment_ids, label_ids = batch
-                loss = model(input_ids, segment_ids, input_mask, label_ids)
-                if n_gpu > 1:
-                    loss = loss.mean() # mean() to average on multi-gpu.
-                tr_loss += loss.item()
-                nb_tr_examples += input_ids.size(0)
-                nb_tr_steps += 1
+    all_input_ids = torch.tensor(select_field(train_features, 'input_ids'), dtype=torch.long)
+    all_input_mask = torch.tensor(select_field(train_features, 'input_mask'), dtype=torch.long)
+    all_segment_ids = torch.tensor(select_field(train_features, 'segment_ids'), dtype=torch.long)
+    all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
 
-                loss.backward()
-                if (step + 1) % 1 == 0:
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    global_step += 1
-            print('Training loss {}'.format(tr_loss/step))
-    if args.do_train:
-        import pdb; pdb.set_trace()
-        # Save a trained model and the associated configuration
-        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-        output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
-        torch.save(model_to_save.state_dict(), output_model_file)
-        output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
-        with open(output_config_file, 'w') as f:
-            f.write(model_to_save.config.to_json_string())
+    train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+    train_sampler = RandomSampler(train_data)
+    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
-        # Load a trained model and config that you have fine-tuned
-        config = BertConfig(output_config_file)
-        model = BertForMultipleChoice(config, num_choices=3)
-        model.load_state_dict(torch.load(output_model_file))
-    else:
-        model = BertForMultipleChoice.from_pretrained(args.bert_model, num_choices=3)
-    model.to(device)
+    eval_features = convert_examples_to_features(eval_examples, tokenizer, args.max_seq_length, True)
+    all_input_ids = torch.tensor(select_field(eval_features, 'input_ids'), dtype=torch.long)
+    all_input_mask = torch.tensor(select_field(eval_features, 'input_mask'), dtype=torch.long)
+    all_segment_ids = torch.tensor(select_field(eval_features, 'segment_ids'), dtype=torch.long)
+    all_label = torch.tensor([f.label for f in eval_features], dtype=torch.long)
+    eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
 
+    # Training and validation loop
+    logger.info("***** Running training *****")
+    logger.info("  Num examples = %d", len(train_examples))
+    logger.info("  Batch size = %d", args.train_batch_size)
+    logger.info("  Num steps = %d", num_train_optimization_steps)
 
-    if args.do_eval:
-        eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training = True)
-        eval_features = convert_examples_to_features(
-            eval_examples, tokenizer, args.max_seq_length, True)
+    # For early stopping...
+    best_accuracy = 0.
+    patience = 0
+
+    model.train()
+    for _ in trange(int(args.num_train_epochs), desc="Epoch"):
+        tr_loss = 0
+        nb_tr_examples, nb_tr_steps = 0, 0
+        for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+            batch = tuple(t.to(device) for t in batch)
+            input_ids, input_mask, segment_ids, label_ids = batch
+            loss = model(input_ids, segment_ids, input_mask, label_ids)
+            if n_gpu > 1:
+                loss = loss.mean() # mean() to average on multi-gpu.
+            tr_loss += loss.item()
+            nb_tr_examples += input_ids.size(0)
+            nb_tr_steps += 1
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            global_step += 1
+        print('Training loss {}'.format(tr_loss/step))
+
         logger.info("***** Running evaluation *****")
         logger.info("  Num examples = %d", len(eval_examples))
         logger.info("  Batch size = %d", args.eval_batch_size)
-        all_input_ids = torch.tensor(select_field(eval_features, 'input_ids'), dtype=torch.long)
-        all_input_mask = torch.tensor(select_field(eval_features, 'input_mask'), dtype=torch.long)
-        all_segment_ids = torch.tensor(select_field(eval_features, 'segment_ids'), dtype=torch.long)
-        all_label = torch.tensor([f.label for f in eval_features], dtype=torch.long)
-        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-        # Run prediction for full data
+
         eval_sampler = SequentialSampler(eval_data)
         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
@@ -466,6 +439,33 @@ def main():
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
+
+        if eval_accuracy > best_accuracy:
+            # Save a trained model and the associated configuration
+            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+            output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
+            torch.save(model_to_save.state_dict(), output_model_file)
+        elif patience < 5:
+            patience += 1
+        else:
+            logger.info("***** Early Stopping *****")
+            break
+
+    output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
+    with open(output_config_file, 'w') as f:
+        f.write(model_to_save.config.to_json_string())
+
+
+
+    #if args.do_train:
+    #    import pdb; pdb.set_trace()
+        # Load a trained model and config that you have fine-tuned
+    #    config = BertConfig(output_config_file)
+    #    model = BertForMultipleChoice(config, num_choices=3)
+    #    model.load_state_dict(torch.load(output_model_file))
+    #else:
+    #    model = BertForMultipleChoice.from_pretrained(args.bert_model, num_choices=3)
+    #model.to(device)
 
 
 if __name__ == "__main__":
