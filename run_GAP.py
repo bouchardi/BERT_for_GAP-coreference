@@ -310,15 +310,16 @@ def main():
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
+    # Output directory
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-
-    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training = True)
-    eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training = True)
+    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training=True)
+    eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training=True)
     num_train_optimization_steps = int(len(train_examples) / args.train_batch_size) * args.num_train_epochs
 
     # Prepare model
@@ -333,7 +334,6 @@ def main():
     param_optimizer = list(model.named_parameters())
 
     # hack to remove pooler, which is not used
-    # thus it produce None grad that break apex
     param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
 
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -366,7 +366,6 @@ def main():
     eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
 
     # Training and validation loop
-    logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_examples))
     logger.info("  Batch size = %d", args.train_batch_size)
     logger.info("  Num steps = %d", num_train_optimization_steps)
@@ -375,8 +374,9 @@ def main():
     best_accuracy = 0.
     patience = 0
 
-    model.train()
-    for _ in trange(int(args.num_train_epochs), desc="Epoch"):
+    for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
+        model.train()
+        logger.info("\n***** Running training *****")
         tr_loss = 0
         nb_tr_examples, nb_tr_steps = 0, 0
         for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
@@ -395,7 +395,7 @@ def main():
             global_step += 1
         print('Training loss {}'.format(tr_loss/step))
 
-        logger.info("***** Running evaluation *****")
+        logger.info("\n***** Running evaluation *****")
         logger.info("  Num examples = %d", len(eval_examples))
         logger.info("  Batch size = %d", args.eval_batch_size)
 
@@ -440,33 +440,26 @@ def main():
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 
-        if eval_accuracy > best_accuracy:
-            # Save a trained model and the associated configuration
-            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+        if eval_accuracy >= best_accuracy:
+            # Save a trained model
+            model_to_save = model.module if hasattr(model, 'module') else model
             output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
             torch.save(model_to_save.state_dict(), output_model_file)
-        elif patience < 5:
+            best_accuracy = eval_accuracy
+            patience = 0
+        elif patience < 4:
             patience += 1
+            logger.info("Patience {}".format(patience))
         else:
             logger.info("***** Early Stopping *****")
+            logger.info("Best eval accuracy: {}".format(best_accuracy))
+            logger.info("Epoch: {}".format(epoch))
             break
 
+    # Save the config
     output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
     with open(output_config_file, 'w') as f:
-        f.write(model_to_save.config.to_json_string())
-
-
-
-    #if args.do_train:
-    #    import pdb; pdb.set_trace()
-        # Load a trained model and config that you have fine-tuned
-    #    config = BertConfig(output_config_file)
-    #    model = BertForMultipleChoice(config, num_choices=3)
-    #    model.load_state_dict(torch.load(output_model_file))
-    #else:
-    #    model = BertForMultipleChoice.from_pretrained(args.bert_model, num_choices=3)
-    #model.to(device)
-
+        f.write(model.module.config.to_json_string())
 
 if __name__ == "__main__":
     main()
