@@ -1,2 +1,5 @@
 pytorch-pretrained-bert
+ipdb
+matplotlib
+torchvision
 pathlib

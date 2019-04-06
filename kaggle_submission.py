@@ -1,8 +1,10 @@
 import argparse
 import os
 from tqdm import tqdm, trange
+import csv
 
 import torch
+from torch.nn import functional as F
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 
@@ -51,25 +53,30 @@ def main():
     all_input_mask = torch.tensor(select_field(features, 'input_mask'), dtype=torch.long)
     all_segment_ids = torch.tensor(select_field(features, 'segment_ids'), dtype=torch.long)
 
-    data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids)
+    data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_ids)
 
     dataloader = DataLoader(data,
                             sampler=SequentialSampler(data),
                             batch_size=batch_size)
 
     model.eval()
-    for input_ids, input_mask, segment_ids in tqdm(dataloader, desc="Evaluating"):
-        input_ids = input_ids.to(device)
-        input_mask = input_mask.to(device)
-        segment_ids = segment_ids.to(device)
 
-        with torch.no_grad():
-            logits = model(input_ids, segment_ids, input_mask)
+    with open(os.path.join(args.model_dir, 'kaggle.csv'), mode='w') as kaggle_file:
+        writer = csv.writer(kaggle_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(['ID', 'A', 'B', 'NEITHER'])
 
-        logits = logits.detach().cpu().numpy()
+        for input_ids, input_mask, segment_ids, ids in tqdm(dataloader, desc="Evaluating"):
+            input_ids = input_ids.to(device)
+            input_mask = input_mask.to(device)
+            segment_ids = segment_ids.to(device)
 
-        # TODO: Softmax
-        # TODO: save in txt file!
+            with torch.no_grad():
+                logits = F.softmax(model(input_ids, segment_ids, input_mask))
+
+            logits = logits.detach().cpu().numpy()
+            #writer.writerow([filename] + logits)
+            for l in logits:
+                writer.writerow(l)
 
 if __name__ == "__main__":
     main()
