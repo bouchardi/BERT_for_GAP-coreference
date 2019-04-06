@@ -1,9 +1,9 @@
 [submodule "gap-coreference"]
 	path = gap-coreference
-	url = git@github.com:google-research-datasets/gap-coreference.git
+	url = https://git@github.com:google-research-datasets/gap-coreference.git
 [submodule "pytorch-pretrained-BERT"]
 	path = pytorch-pretrained-BERT
-	url = git@github.com:huggingface/pytorch-pretrained-BERT.git
+	url = https://git@github.com:huggingface/pytorch-pretrained-BERT.git
 [submodule "swagaf"]
 	path = swagaf
-	url = git@github.com:rowanz/swagaf.git
+	url = https://git@github.com:rowanz/swagaf.git
