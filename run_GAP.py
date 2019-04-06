@@ -132,7 +132,8 @@ def read_GAP_examples(input_file, is_training):
             A=line[4],
             B=line[7],
             A_coref=line[6] if is_training else None,
-            B_coref=line[9] if is_training else None)
+            B_coref=line[9] if is_training else None
+            )
         for line in lines[1:] # we skip the line with the column names
     ]
 
@@ -318,7 +319,7 @@ def main():
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training=True)
+    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-test.tsv'), is_training=True)
     eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training=True)
     num_train_optimization_steps = int(len(train_examples) / args.train_batch_size) * args.num_train_epochs
 
