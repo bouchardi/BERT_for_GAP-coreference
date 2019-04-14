@@ -46,26 +46,26 @@ def main():
     tokenizer = BertTokenizer.from_pretrained(bert_model, do_lower_case=do_lower_case)
 
     # Prepare test data
-    examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-test.tsv'), is_training=False)
+    examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training=False)
     features = convert_examples_to_features(examples, tokenizer, max_seq_length, True)
 
     all_input_ids = torch.tensor(select_field(features, 'input_ids'), dtype=torch.long)
     all_input_mask = torch.tensor(select_field(features, 'input_mask'), dtype=torch.long)
     all_segment_ids = torch.tensor(select_field(features, 'segment_ids'), dtype=torch.long)
 
-    data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_ids)
+    data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids)
 
     dataloader = DataLoader(data,
                             sampler=SequentialSampler(data),
-                            batch_size=batch_size)
+                            batch_size=batch_size,
+                            shuffle=False)
 
     model.eval()
-
-    with open(os.path.join(args.model_dir, 'kaggle.csv'), mode='w') as kaggle_file:
+    with open(os.path.join(args.model_dir, 'kaggle-dev.csv'), mode='w') as kaggle_file:
         writer = csv.writer(kaggle_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         writer.writerow(['ID', 'A', 'B', 'NEITHER'])
 
-        for input_ids, input_mask, segment_ids, ids in tqdm(dataloader, desc="Evaluating"):
+        for i, (input_ids, input_mask, segment_ids) in tqdm(enumerate(dataloader), desc="Evaluating"):
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
@@ -75,8 +75,9 @@ def main():
 
             logits = logits.detach().cpu().numpy()
             #writer.writerow([filename] + logits)
-            for l in logits:
-                writer.writerow(l)
+            for j, l in enumerate(logits):
+                filename = features[i * batch_size + j].example_id
+                writer.writerow([filename] + list(l))
 
 if __name__ == "__main__":
     main()
