@@ -1,0 +1,18 @@
+1. Intro (Caro)
+Problem with coref res
+Task Gender pronoun reolution in general
+Kaggle comopetition with new dataset
+
+2. Related work (PA)
+BERT for swag dataset. Adversarial structure.
+Why did we decide to use BERT? Challenge with small supervised dataset. BERT pretrained on large corpus.
+
+3. Experiments. (Isa)
+Describe SWAG setup.
+Describe HP paremeter search.
+Difficulties:
+- BERT is huge
+- The dataset has very long context
+- Ensemble methods
+MLP output
+Data augmentation (Caro)
