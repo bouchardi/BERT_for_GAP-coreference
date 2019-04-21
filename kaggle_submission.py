@@ -31,10 +31,12 @@ def main():
     args = parser.parse_args()
 
     # TODO: Fix hardcoded values
-    max_seq_length = 128
+    max_seq_length = 512
     bert_model = 'bert-base-cased'
     do_lower_case = False
-    batch_size = 8
+    n_classe = 3
+    test_file = 'gap-development.tsv'
+    batch_size = 1
 
     # Load a trained model and config that you have fine-tuned
     config = BertConfig(os.path.join(args.model_dir, CONFIG_NAME))
@@ -46,7 +48,7 @@ def main():
     tokenizer = BertTokenizer.from_pretrained(bert_model, do_lower_case=do_lower_case)
 
     # Prepare test data
-    examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-development.tsv'), is_training=False)
+    examples = read_GAP_examples(os.path.join(args.data_dir, test_file), n_classes=n_classes), is_training=False)
     features = convert_examples_to_features(examples, tokenizer, max_seq_length, True)
 
     all_input_ids = torch.tensor(select_field(features, 'input_ids'), dtype=torch.long)

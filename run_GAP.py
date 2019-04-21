@@ -29,11 +29,13 @@ import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
+from torch.nn import CrossEntropyLoss
 from torch.utils.data.distributed import DistributedSampler
+from torch import nn
 from tqdm import tqdm, trange
 
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from pytorch_pretrained_bert.modeling import (BertForMultipleChoice, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+from pytorch_pretrained_bert.modeling import (BertForMultipleChoice, BertPreTrainedModel, BertModel, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 
@@ -41,6 +43,67 @@ logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(messa
                     datefmt = '%m/%d/%Y %H:%M:%S',
                     level = logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+
+class BertForTwoChoices(BertPreTrainedModel):
+    """BERT model for two choices input converted to three choices tasks.
+    This module is composed of the BERT model with a conv layer to convert the output channels and a
+    linear layer on top of the pooled output.
+
+    Params:
+        `config`: a BertConfig class instance with the configuration to build a new model.
+        `num_choices`: the number of classes for the classifier. Default = 2.
+
+    Inputs:
+        `input_ids`: a torch.LongTensor of shape [batch_size, num_choices, sequence_length]
+            with the word token indices in the vocabulary(see the tokens preprocessing logic in the scripts
+            `extract_features.py`, `run_classifier.py` and `run_squad.py`)
+        `token_type_ids`: an optional torch.LongTensor of shape [batch_size, num_choices, sequence_length]
+            with the token types indices selected in [0, 1]. Type 0 corresponds to a `sentence A`
+            and type 1 corresponds to a `sentence B` token (see BERT paper for more details).
+        `attention_mask`: an optional torch.LongTensor of shape [batch_size, num_choices, sequence_length] with indices
+            selected in [0, 1]. It's a mask to be used if the input sequence length is smaller than the max
+            input sequence length in the current batch. It's the mask that we typically use for attention when
+            a batch has varying length sentences.
+        `labels`: labels for the classification output: torch.LongTensor of shape [batch_size]
+            with indices selected in [0, ..., num_choices].
+
+    Outputs:
+        if `labels` is not `None`:
+            Outputs the CrossEntropy classification loss of the output with the labels.
+        if `labels` is `None`:
+            Outputs the classification logits of shape [batch_size, num_labels].
+    """
+    def __init__(self, config, num_choices_in, num_choices_out):
+        super(BertForTwoChoices, self).__init__(config)
+        self.num_choices_in = num_choices_in
+        self.num_choices_out = num_choices_out
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.conv = nn.Conv1d(in_channels=num_choices_in, out_channels=num_choices_out, kernel_size=1)
+        self.relu = nn.ReLU()
+        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.apply(self.init_bert_weights)
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
+        batch_size = input_ids.size(0)
+        flat_input_ids = input_ids.view(-1, input_ids.size(-1))
+        flat_token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1))
+        flat_attention_mask = attention_mask.view(-1, attention_mask.size(-1))
+        _, pooled_output = self.bert(flat_input_ids, flat_token_type_ids, flat_attention_mask, output_all_encoded_layers=False)
+        pooled_output = self.dropout(pooled_output)
+        pooled_output = self.relu(self.conv(pooled_output.view(1, self.num_choices_in, -1)))
+        logits = self.classifier(pooled_output)
+        reshaped_logits = logits.view(-1, self.num_choices_out)
+
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(reshaped_logits, labels)
+            return loss
+        else:
+            return reshaped_logits
+
 
 
 class GAPExample(object):
@@ -51,13 +114,15 @@ class GAPExample(object):
                  pronoun,
                  A,
                  B,
+                 n_classes,
                  A_coref=None,
                  B_coref=None):
         self.id = GAP_id
         self.text = text
         self.pronoun = pronoun
-        # TODO: pick a better token for "neither"
-        self.candidates = [A, B, u'neither']
+        self.candidates = [A, B]
+        if n_classes == 3:
+            self.candidates.append(u'neither')
 
         if not A_coref or not B_coref:
             self.label = None
@@ -82,7 +147,7 @@ class GAPExample(object):
             "text: {}".format(self.text),
             "pronoun: {}".format(self.pronoun),
             "A: {}".format(self.candidates[0]),
-            "A: {}".format(self.candidates[0]),
+            "B: {}".format(self.candidates[1]),
         ]
 
         if self.label is not None:
@@ -110,7 +175,7 @@ class InputFeatures(object):
         self.label = label
 
 
-def read_GAP_examples(input_file, is_training):
+def read_GAP_examples(input_file, is_training, n_classes):
     with open(input_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='\t')
         lines = []
@@ -131,9 +196,9 @@ def read_GAP_examples(input_file, is_training):
             pronoun=line[2],
             A=line[4],
             B=line[7],
+            n_classes=n_classes,
             A_coref=line[6] if is_training else None,
-            B_coref=line[9] if is_training else None
-            )
+            B_coref=line[9] if is_training else None)
         for line in lines[1:] # we skip the line with the column names
     ]
 
@@ -159,10 +224,11 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     # final decision of the model, we will run a softmax over these 3
     # outputs.
     features = []
+    lens = []
     for example_index, example in enumerate(examples):
         text_tokens = tokenizer.tokenize(example.text)
         pronoun_tokens = tokenizer.tokenize(example.pronoun)
-
+        lens.append(len(example.text))
         choices_features = []
         for index, candidate in enumerate(example.candidates):
             # We create a copy of the text tokens in order to be
@@ -214,6 +280,9 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             )
         )
 
+    print('min sequence len {}'.format(min(lens)))
+    print('max sequence len {}'.format(max(lens)))
+    print('avg sequence len {}'.format(sum(lens)/len(lens)))
     return features
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
@@ -266,7 +335,7 @@ def main():
 
     ## Other parameters
     parser.add_argument("--max_seq_length",
-                        default=128,
+                        default=512,
                         type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
@@ -275,13 +344,17 @@ def main():
                         action='store_true',
                         help="Set this flag if you are using an uncased model.")
     parser.add_argument("--train_batch_size",
-                        default=32,
+                        default=1,
                         type=int,
                         help="Total batch size for training.")
     parser.add_argument("--eval_batch_size",
-                        default=8,
+                        default=1,
                         type=int,
                         help="Total batch size for eval.")
+    parser.add_argument("--n_classes",
+                        default=3,
+                        type=int,
+                        help="Number of classes to pass to BERT. (2 or 3)")
     parser.add_argument("--learning_rate",
                         default=5e-5,
                         type=float,
@@ -319,14 +392,19 @@ def main():
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-test.tsv'), is_training=True)
-    eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training=True)
+    train_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-test.tsv'), is_training=True, n_classes=args.n_classes)
+    eval_examples = read_GAP_examples(os.path.join(args.data_dir, 'gap-validation.tsv'), is_training=True, n_classes=args.n_classes)
     num_train_optimization_steps = int(len(train_examples) / args.train_batch_size) * args.num_train_epochs
 
     # Prepare model
-    model = BertForMultipleChoice.from_pretrained(args.bert_model,
-        cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_-1'),
-        num_choices=3)
+    if args.n_classes == 3:
+        model = BertForMultipleChoice.from_pretrained(args.bert_model,
+                    cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_-1'),
+                    num_choices=3)
+    else:
+        model = BertForTwoChoices.from_pretrained(args.bert_model,
+            cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_-1'),
+            num_choices_in=2, num_choices_out=3)
     model.to(device)
     if n_gpu > 1:
         model = torch.nn.DataParallel(model)
@@ -411,7 +489,6 @@ def main():
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
             label_ids = label_ids.to(device)
-
             with torch.no_grad():
                 tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
                 logits = model(input_ids, segment_ids, input_mask)
@@ -434,14 +511,14 @@ def main():
                   'global_step': global_step,
                   'loss': tr_loss/nb_tr_steps}
 
-        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-        with open(output_eval_file, "w") as writer:
-            logger.info("***** Eval results *****")
-            for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
-                writer.write("%s = %s\n" % (key, str(result[key])))
-
         if eval_accuracy >= best_accuracy:
+            output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+            with open(output_eval_file, "w") as writer:
+                logger.info("***** Eval results *****")
+                for key in sorted(result.keys()):
+                    logger.info("  %s = %s", key, str(result[key]))
+                    writer.write("%s = %s\n" % (key, str(result[key])))
+
             # Save a trained model
             model_to_save = model.module if hasattr(model, 'module') else model
             output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
