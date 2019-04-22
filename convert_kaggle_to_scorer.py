@@ -1,5 +1,5 @@
 '''
-Use this script to convert kaggle submission to file needed for gap_scorer.py
+Use this script to convert kaggle submission to file format needed for gap_scorer.py
 
 Usage of gap_scorer.py:
     python3 gap_scorer.py --gold_tsv gap-test.tsv --system_tsv ../results/gap_scorer-test.tsv
