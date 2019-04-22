@@ -4,7 +4,7 @@ This project was realised in the context of the INF8225 AI course. In this proje
 we aim to reduce gender bias in pronoun resolution by creating a coreference 
 resolver that performs well on a gender-balanced pronoun dataset, The Gendered 
 Ambiguous Pronouns (GAP) dataset. We leverage BERT's strong pre-training tasks on 
-large unsupervised datasets and transfer these contextual representations.
+large unsupervised datasets and transfer these contextual representations to the fine-tuning stage, which is trained on GAP.
 
 We have submitted our best performing model to the [Gendered Pronoun Resolution](https://www.kaggle.com/c/gendered-pronoun-resolution/) Kaggle competition. 
 
