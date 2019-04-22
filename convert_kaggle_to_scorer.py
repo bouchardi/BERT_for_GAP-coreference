@@ -8,7 +8,7 @@ Usage of gap_scorer.py:
 import pandas as pd
 
 # read in kaggle submission
-df = pd.read_csv('../results/kaggle-dev.tsv', delimiter='\t', encoding='utf-8')
+df = pd.read_csv('../results/kaggle-test.tsv', delimiter='\t', encoding='utf-8')
 
 # convert df to nparray
 df_values = df[['A','B','NEITHER']].values
@@ -26,5 +26,5 @@ df_ = pd.DataFrame(data=nparray, columns=columns)
 df_.insert(loc=0, column='ID', value=df['ID'])
 
 # save to file
-df_.to_csv("../results/gap_scorer-dev.tsv", sep='\t', encoding='utf-8', index=False)
+df_.to_csv("../results/gap_scorer-test.tsv", sep='\t', encoding='utf-8', index=False)
 
